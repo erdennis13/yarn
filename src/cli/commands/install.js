@@ -39,6 +39,9 @@ const path = require('path');
 const semver = require('semver');
 const uuid = require('uuid');
 const ssri = require('ssri');
+const cp = require('child_process');
+const util = require('util');
+const exec = util.promisify(cp.exec);
 
 const ONE_DAY = 1000 * 60 * 60 * 24;
 
@@ -81,6 +84,9 @@ type Flags = {
 
   // add, remove, upgrade
   workspaceRootIsCwd: boolean,
+
+  preFetchScript: string,
+  postInstallScript: string,
 };
 
 /**
@@ -160,6 +166,9 @@ function normalizeFlags(config: Config, rawFlags: Object): Flags {
 
     // add, remove, update
     workspaceRootIsCwd: rawFlags.workspaceRootIsCwd !== false,
+
+    preFetchScript: rawFlags.preFetchScript,
+    postInstallScript: rawFlags.postInstallScript,
   };
 
   if (config.getOption('ignore-scripts')) {
@@ -428,6 +437,7 @@ export class Install {
   preparePatterns(patterns: Array<string>): Array<string> {
     return patterns;
   }
+
   preparePatternsForLinking(patterns: Array<string>, cwdManifest: Manifest, cwdIsRoot: boolean): Array<string> {
     return patterns;
   }
@@ -572,6 +582,18 @@ export class Install {
       this.scripts.setArtifacts(artifacts);
     }
 
+    if (this.flags.preFetchScript) {
+      steps.push(async (curr: number, total: number) => {
+        this.reporter.step(curr, total, 'Running PreFetch Step', emoji.get('mag'));
+        const {stdout, stderr} = await exec(`${this.flags.preFetchScript}`);
+        if (stderr) {
+          console.error(`error: ${stderr}`);
+        }
+        console.log(`${stdout}`);
+        return {bailout: !stderr};
+      });
+    }
+
     if (!this.flags.ignoreEngines && typeof manifest.engines === 'object') {
       steps.push(async (curr: number, total: number) => {
         this.reporter.step(curr, total, this.reporter.lang('checkingManifest'), emoji.get('mag'));
@@ -704,6 +726,17 @@ export class Install {
           emoji.get('black_circle_for_record'),
         );
         await this.config.requestManager.saveHar(filename);
+      });
+    }
+
+    if (this.flags.postInstallScript) {
+      steps.push(async (curr: number, total: number) => {
+        this.reporter.step(curr, total, 'Running Post Install Step', emoji.get('mag'));
+        const {stdout, stderr} = await exec(`${this.flags.postInstallScript}`, {stdio: 'inherit'});
+        if (stderr) {
+          console.error(`error: ${stderr}`);
+        }
+        console.log(`${stdout}`);
       });
     }
 
@@ -1114,6 +1147,7 @@ export class Install {
    */
 
   maybeOutputUpdate() {}
+
   maybeOutputUpdate: any;
 }
 
@@ -1132,6 +1166,8 @@ export function setFlags(commander: Object) {
   commander.option('-O, --save-optional', 'DEPRECATED - save package to your `optionalDependencies`');
   commander.option('-E, --save-exact', 'DEPRECATED');
   commander.option('-T, --save-tilde', 'DEPRECATED');
+  commander.option('--pre-fetch-script <file>', 'Path to script that will be run prior to fetching packages');
+  commander.option('--post-install-script <file>', 'Path to script that will be run after installing packages');
 }
 
 export async function install(config: Config, reporter: Reporter, flags: Object, lockfile: Lockfile): Promise<void> {
